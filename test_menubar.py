@@ -8,7 +8,7 @@ sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import clipspeak
 from clipspeak import Config, PRESETS, Speaker, build_menubar
 
-clipspeak.CHOICES_PATH = ".tmp/test_choices.json"   # never touch the real one
+clipspeak.config.CHOICES_PATH = ".tmp/test_choices.json"   # never touch the real one
 
 
 class FakeBackend:
@@ -125,7 +125,7 @@ class OtherBackend(FakeBackend):
 
 
 other = OtherBackend()
-clipspeak.build_backend = lambda cfg: other
+clipspeak.backends.build_backend = lambda cfg: other
 ctrl.setPreset_(ctrl.presetItems[1])
 assert cfg.preset == "kokoro", cfg.preset
 assert cfg.speed == 1.5, "speed must survive the switch"
@@ -136,7 +136,7 @@ assert [i.state() for i in ctrl.presetItems] == [0, 1, 0], "new preset not ticke
 assert ctrl.currentState() == "idle", ctrl.currentState()
 
 # a failed load keeps the model that works
-clipspeak.build_backend = lambda cfg: (_ for _ in ()).throw(RuntimeError("no weights"))
+clipspeak.backends.build_backend = lambda cfg: (_ for _ in ()).throw(RuntimeError("no weights"))
 ctrl.setPreset_(ctrl.presetItems[2])
 wait_for(lambda: not speaker.loading, "the failed load to finish")
 assert speaker.backend is other, "a failed load dropped the working backend"

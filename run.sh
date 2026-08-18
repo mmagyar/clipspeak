@@ -54,4 +54,4 @@ if ! ready; then
   say "Ready. The first run downloads ~2GB of model weights from Hugging Face."
 fi
 
-exec "$PYBIN" clipspeak.py "$@"
+exec "$PYBIN" -m clipspeak "$@"

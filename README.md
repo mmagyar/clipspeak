@@ -8,7 +8,7 @@ Copy text on macOS, hear it read aloud by a local neural TTS model. Nothing leav
 ./run.sh
 ```
 
-The first run installs portaudio and ffmpeg with Homebrew, builds `.venv`, and downloads ~2GB of model weights. Later runs start immediately. Arguments are passed through to `clipspeak.py`, so `./run.sh --preset system --check` proves the audio path with no downloads, and `./run.sh --check` proves the model.
+The first run installs portaudio and ffmpeg with Homebrew, builds `.venv`, and downloads ~2GB of model weights. Later runs start immediately. Arguments are passed through to `python -m clipspeak`, so `./run.sh --preset system --check` proves the audio path with no downloads, and `./run.sh --check` proves the model.
 
 The watcher always runs as a menu bar app. There is no headless mode.
 
