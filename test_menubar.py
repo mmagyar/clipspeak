@@ -5,7 +5,10 @@ import time
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
-from clipspeak import Config, Speaker, build_menubar
+import clipspeak
+from clipspeak import Config, PRESETS, Speaker, build_menubar
+
+clipspeak.CHOICES_PATH = ".tmp/test_choices.json"   # never touch the real one
 
 
 class FakeBackend:
@@ -60,7 +63,7 @@ ctrl = build_menubar(cfg, speaker, clip, threading.Event())
 LONG = "This is a long enough sentence of ordinary prose that the filter lets it through."
 
 assert ctrl.currentState() == "idle", ctrl.currentState()
-assert ctrl.item.menu().numberOfItems() == 10, ctrl.item.menu().numberOfItems()
+assert ctrl.item.menu().numberOfItems() == 11, ctrl.item.menu().numberOfItems()
 
 # voice and speed submenus, with the current value ticked
 assert [i.title() for i in ctrl.voiceItems] == ["ryan", "serena"]
@@ -110,5 +113,32 @@ clip.text = "short"
 ctrl.speakNow_(None)
 wait_for(lambda: len(backend.spoken) == before + 1, "forced speak")
 assert backend.spoken[-1] == ["short"], backend.spoken[-1]
+
+# switching model reloads on the worker thread and repopulates the voice list
+assert [i.title() for i in ctrl.presetItems] == list(PRESETS)
+assert [i.state() for i in ctrl.presetItems] == [1, 0, 0], "current preset not ticked"
+
+
+class OtherBackend(FakeBackend):
+    voice = "af_heart"
+    voice_list = ["af_heart", "am_adam"]
+
+
+other = OtherBackend()
+clipspeak.build_backend = lambda cfg: other
+ctrl.setPreset_(ctrl.presetItems[1])
+assert cfg.preset == "kokoro", cfg.preset
+assert cfg.speed == 1.5, "speed must survive the switch"
+wait_for(lambda: speaker.backend is other, "the backend to swap")
+ctrl.refreshUI()
+assert [i.title() for i in ctrl.voiceItems] == ["af_heart", "am_adam"], "voice list did not follow"
+assert [i.state() for i in ctrl.presetItems] == [0, 1, 0], "new preset not ticked"
+assert ctrl.currentState() == "idle", ctrl.currentState()
+
+# a failed load keeps the model that works
+clipspeak.build_backend = lambda cfg: (_ for _ in ()).throw(RuntimeError("no weights"))
+ctrl.setPreset_(ctrl.presetItems[2])
+wait_for(lambda: not speaker.loading, "the failed load to finish")
+assert speaker.backend is other, "a failed load dropped the working backend"
 
 print("all menu bar tests passed")

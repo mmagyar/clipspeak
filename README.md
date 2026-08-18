@@ -14,15 +14,38 @@ The watcher always runs as a menu bar app. There is no headless mode.
 
 ## Use
 
-The menu bar icon shows the state: waveform when watching, filled waveform when speaking, crossed-out speaker when paused. Its menu holds Speak Clipboard (reads the clipboard even if the filters would skip it), Stop Speaking, Pause Watching, Voice, Speed, and Quit. Text copied while paused is not read on resume. There is no Dock icon.
+The menu bar icon shows the state: waveform when watching, filled waveform when speaking, crossed-out speaker when paused, down arrow while a model loads. Its menu holds Speak Clipboard (reads the clipboard even if the filters would skip it), Stop Speaking, Pause Watching, Model, Voice, Speed, and Quit. Text copied while paused is not read on resume. There is no Dock icon.
 
-Voice lists the speakers the loaded model declares. Speed offers 0.75x to 2x. Both apply to the next utterance, not the one playing, and reset to the preset defaults on restart.
+Model switches between the presets without a restart. The switch stops the current utterance, loads the new weights, and rebuilds the voice list from the new model. A `--model` override is dropped. If the load fails, the old model stays.
+
+Voice lists the speakers the loaded model declares. Speed offers 0.75x to 2x. Both apply to the next utterance, not the one playing. Speed survives a model switch, voice does not.
+
+The menu bar writes each pick to `~/.config/clipspeak.json` and reads it at startup. Delete the file to go back to the defaults. An environment variable or a CLI flag still wins over the saved value.
 
 `./run.sh --voice serena` and any other flag still starts the menu bar. Ctrl-C in the terminal quits it, as does the Quit item. `./run.sh --say "text"` and `./run.sh --check` are the two one-shot modes that speak once and exit without an icon.
 
 Copying new text interrupts whatever is playing. Copying anything under 25 characters cancels playback and is not read, so a single word works as a stop button.
 
-Skipped automatically: images and files, bare URLs, bare file paths, single tokens, text over 6000 characters, and anything below 45% letters, which catches JSON, hex, base64 and minified code. Markdown scaffolding is stripped before synthesis. Fenced code blocks become the words "code block", and bare URLs inside prose become the word "link".
+Skipped automatically: images and files, bare URLs, bare file paths, single tokens, and text over 6000 characters. Hex, base64 and minified bundles are skipped too, detected by mean token length rather than by counting letters, so real source code still gets through. Markdown scaffolding is stripped before synthesis, and bare URLs inside prose become the word "link".
+
+## Technical text
+
+Neural voices read `run.sh` as a mumble. The grapheme-to-phoneme stage treats the dot as sentence punctuation and never says the word "dot", so the extension arrives unstressed after a pause. clipspeak rewrites technical text into spoken English before synthesis, for every preset.
+
+| Copied | Spoken |
+|---|---|
+| `run.sh`, `./run.sh` | run dot S H |
+| `src/foo/bar.ts` | src slash foo slash bar dot T S |
+| `~/code/notes.md` | home slash code slash notes dot M D |
+| `min_chars`, `CLIPSPEAK_MIN_CHARS` | min chars, clipspeak min chars |
+| `--poll-interval` | poll interval |
+| `a -> b`, `x != y`, `c && d` | a arrow b, x not equals y, c and d |
+
+Only known file extensions are rewritten, so `e.g.`, `U.S.`, `3.5` and `and/or` are left alone.
+
+Copy a JSON object or array and it is narrated structurally, not symbol by symbol. `{"id": 1, "tags": ["a","b"]}` becomes "object. key id, value 1. key tags, list of 2. a. b."
+
+Copy source code, or a markdown answer with a fenced block, and the code is read rather than announced. Brackets become pauses, operators become words, and identifiers are split, so `def load_model(path: str) -> Model:` becomes "def load model, path, string, arrow Model." This is line-oriented, not a parser, so it reads code literally with sensible pauses instead of describing what the code does.
 
 ## Models
 
@@ -57,7 +80,7 @@ Most settings have a flag and a `CLIPSPEAK_*` environment variable.
 | `--poll-interval` | `CLIPSPEAK_POLL_INTERVAL` | `0.35` | Seconds between clipboard checks |
 | `--speak-on-start` | `CLIPSPEAK_SPEAK_ON_START` | off | Read what is already copied at launch |
 
-`CLIPSPEAK_CHUNK_CHARS` (220) sets the synthesis chunk size. Lower it to about 120 for a faster first sound. `CLIPSPEAK_MIN_ALPHA_RATIO` (0.45) sets the code-detection threshold. Lower it if real prose gets rejected.
+`CLIPSPEAK_CHUNK_CHARS` (900) sets the synthesis chunk size. The Qwen preset streams audio out of the model while it generates, so a large chunk does not delay the first sound. Keep it large: each chunk is a separate utterance, and the voice changes tone at every boundary. `CLIPSPEAK_MIN_ALPHA_RATIO` (0.20) rejects text that is neither prose nor code. Lower it if something you want read gets rejected.
 
 Qwen accepts `speed` and then ignores it, so clipspeak stretches the audio itself with WSOLA, which changes duration without moving pitch. Kokoro and `say` handle speed natively. Measured error against the requested factor is under 1.5% across 0.75x to 2x.
 

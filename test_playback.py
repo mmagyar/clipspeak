@@ -63,3 +63,75 @@ assert len(time_stretch(tone, 1.0, SR)) == len(tone), "1.0x must be a no-op"
 assert len(time_stretch(tone[:100], 1.5, SR)) == 100, "too-short input must pass through"
 
 print("all time stretch tests passed")
+
+
+# _generate must stay lazy: the streaming models hand back audio a second at a
+# time, and collecting it first would put that whole wait in front of the sound.
+class FakeModel:
+    def __init__(self, reject: str | None = None) -> None:
+        self.reject = reject
+        self.yielded = 0
+
+    def generate(self, text: str, **kwargs):
+        if self.reject and self.reject in kwargs:
+            raise TypeError(f"generate() got an unexpected keyword argument '{self.reject}'")
+        for _ in range(3):
+            self.yielded += 1
+            yield types.SimpleNamespace(audio=np.zeros(2400, dtype=np.float32), sample_rate=24000)
+
+
+lazy = object.__new__(MLXBackend)
+lazy.model = FakeModel()
+lazy.gen_kwargs = {"stream": True}
+lazy.voice = "ryan"
+lazy.native_speed = True
+lazy.speed = 1.0
+
+it = lazy._generate("hello")
+next(it)
+assert lazy.model.yielded == 1, f"_generate ran ahead: {lazy.model.yielded} items before the first"
+assert len(list(it)) == 2, "_generate dropped the remaining audio"
+
+lazy.model = FakeModel(reject="stream")
+assert len(list(lazy._generate("hello"))) == 3, "_generate must retry without a rejected kwarg"
+
+print("all generate tests passed")
+
+
+# A low temperature can make the model loop on the silence token forever, so the
+# token budget has to cap a chunk near its real length, not at the 4096 default.
+from clipspeak import token_budget
+
+SENTENCE = "The model loads once at startup and stays resident in memory." * 3
+assert token_budget(SENTENCE) < 4096, "budget must beat the library default"
+assert token_budget(SENTENCE) / 12.5 > len(SENTENCE) / 15, "budget must fit the text it has to speak"
+assert token_budget("hi") >= 64, "a short chunk still needs a floor"
+
+print("all token budget tests passed")
+
+
+# A stalled generation streams silence until it runs out of tokens. play() has to
+# cut that chunk short rather than hold the speaker quiet for a minute.
+import clipspeak
+
+stall = object.__new__(MLXBackend)
+stall.sample_rate = 24000
+stall.native_speed = True
+stall.speed = 1.0
+played: list[float] = []
+fake_sd.OutputStream = lambda **kw: types.SimpleNamespace(
+    start=lambda: None, write=lambda a: played.append(len(a) / 24000),
+    stop=lambda: None, close=lambda: None, abort=lambda: None,
+)
+
+def stalling(text: str):
+    yield types.SimpleNamespace(audio=np.full(24000, 0.5, dtype=np.float32), sample_rate=24000)
+    for _ in range(60):   # a minute of dead air
+        yield types.SimpleNamespace(audio=np.zeros(24000, dtype=np.float32), sample_rate=24000)
+
+stall._generate = stalling
+stall.play(["one"], threading.Event())
+assert sum(played) < 1 + clipspeak.MAX_SILENCE + 1, f"played {sum(played):.0f}s, so the stall was not cut"
+assert sum(played) >= 1, "the real speech before the stall must still play"
+
+print("all stall tests passed")
