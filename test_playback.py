@@ -14,6 +14,7 @@ fake_sd.OutputStream = lambda **kw: types.SimpleNamespace(
 sys.modules["sounddevice"] = fake_sd
 
 from clipspeak import MLXBackend
+from clipspeak.backends import PRE_ROLL
 
 backend = object.__new__(MLXBackend)
 backend.sample_rate = 24000
@@ -168,15 +169,23 @@ def loud(text: str):
         yield types.SimpleNamespace(audio=np.full(SR, 0.5, dtype=np.float32), sample_rate=SR)
 
 
+# Skip the pre-roll: it steps from silence into this fake's constant 0.5, which
+# real speech (starting at zero) never does.
+def after_pre_roll(a):
+    return a[int(SR * PRE_ROLL) :]
+
+
 played, _ = play_recording(loud)
 assert abs(played[-1]) < 0.02, f"audio ends at {played[-1]:.2f}, so it clicks"
-assert np.abs(np.diff(played)).max() < 0.02, "the ending must ramp, not step"
+assert np.abs(np.diff(after_pre_roll(played))).max() < 0.02, "the ending must ramp, not step"
 assert len(played) >= 4 * SR, "the ramp must not eat the speech"
 
 cut, aborts = play_recording(loud, stop_after=3)
 assert not aborts, "abort() drops the ramp, so a cancel must drain instead"
 assert abs(cut[-1]) < 0.02, f"a cancelled ending sits at {cut[-1]:.2f}, so it clicks"
-assert np.abs(np.diff(cut)).max() < 0.02, "a cancelled ending must ramp, not step"
+assert np.abs(np.diff(after_pre_roll(cut))).max() < 0.02, "a cancelled ending must ramp, not step"
 assert len(cut) < 4 * SR, "cancel must still cut the audio short"
+
+assert np.abs(played[: int(SR * PRE_ROLL)]).max() == 0, "the first audio needs silence in front"
 
 print("all click tests passed")
