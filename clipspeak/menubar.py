@@ -213,8 +213,9 @@ def run_menubar(cfg: Config) -> int:
     which must never exit (see Speaker)."""
     from AppKit import NSApplication
 
-    backend = backends.build_backend(cfg)
-    speaker = Speaker(backend, cfg)
+    # The placeholder backend is swapped for the real one below, once the icon
+    # and the clipboard watcher are up.
+    speaker = Speaker(backends.Backend(), cfg)
     clip = ClipboardReader()
     if not cfg.speak_on_start:
         clip.poll()  # swallow whatever is already there
@@ -223,8 +224,14 @@ def run_menubar(cfg: Config) -> int:
     signal.signal(signal.SIGINT, lambda *_: stopping.set())
     signal.signal(signal.SIGTERM, lambda *_: stopping.set())
 
-    build_menubar(cfg, speaker, clip, stopping)
-    log.info("menu bar ready (preset=%s). copy text to hear it.", cfg.preset)
+    ctrl = build_menubar(cfg, speaker, clip, stopping)
+    # Log before the load starts: loading the weights swallows stderr for a few
+    # seconds, so anything logged here during it never reaches the terminal.
+    log.info("menu bar ready (preset=%s). loading the model ...", cfg.preset)
+    # The load used to run before the menu bar was built, so the watcher did not
+    # exist yet and text copied during the wait was dropped by the poll above.
+    speaker.load(lambda: backends.build_backend(cfg))
+    ctrl.refreshUI()   # show the loading icon now, not at the first tick
     NSApplication.sharedApplication().run()
     speaker.stop()
     log.info("stopped")

@@ -56,11 +56,32 @@ def wait_for(predicate, what: str, timeout: float = 5.0) -> None:
 
 cfg = Config()
 backend = FakeBackend()
-speaker = Speaker(backend, cfg)
 clip = FakeClipboard()
-ctrl = build_menubar(cfg, speaker, clip, threading.Event())
 
 LONG = "This is a long enough sentence of ordinary prose that the filter lets it through."
+
+# Startup: the icon is up while the weights are still loading, and text copied
+# in that window is queued rather than dropped.
+gate = threading.Event()
+speaker = Speaker(clipspeak.backends.Backend(), cfg)
+speaker.load(lambda: (gate.wait(timeout=5), backend)[1])
+ctrl = build_menubar(cfg, speaker, clip, threading.Event())
+
+assert ctrl.currentState() == "loading", ctrl.currentState()
+clip.put(LONG)
+ctrl.tick_(None)
+time.sleep(0.2)
+assert not backend.spoken, "spoke before the model had loaded"
+
+gate.set()
+wait_for(lambda: backend.spoken, "text copied during the load to be spoken")
+assert backend.spoken[-1] == [LONG], backend.spoken[-1]
+ctrl.stopSpeaking_(None)
+backend.release.set()
+wait_for(lambda: not speaker.busy, "speaker to go idle")
+backend.release.clear()
+backend.spoken.clear()
+ctrl.refreshUI()
 
 assert ctrl.currentState() == "idle", ctrl.currentState()
 assert ctrl.item.menu().numberOfItems() == 11, ctrl.item.menu().numberOfItems()
