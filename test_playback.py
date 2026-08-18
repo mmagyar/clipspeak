@@ -135,3 +135,48 @@ assert sum(played) < 1 + clipspeak.MAX_SILENCE + 1, f"played {sum(played):.0f}s,
 assert sum(played) >= 1, "the real speech before the stall must still play"
 
 print("all stall tests passed")
+
+
+# A hard cut from a mid-waveform sample to silence is an audible click. Every
+# ending has to ramp down first, and a cancel has to drain that ramp, not drop it.
+def play_recording(generate, stop_after: int | None = None):
+    """Play one chunk through a fake stream. Returns (samples, abort_calls)."""
+    out: list[np.ndarray] = []
+    aborts: list[bool] = []
+    cancel = threading.Event()
+
+    def write(a):
+        out.append(np.asarray(a, dtype=np.float32).reshape(-1).copy())
+        if stop_after is not None and len(out) == stop_after:
+            cancel.set()
+
+    fake_sd.OutputStream = lambda **kw: types.SimpleNamespace(
+        start=lambda: None, write=write, stop=lambda: None,
+        close=lambda: None, abort=lambda: aborts.append(True),
+    )
+    back = object.__new__(MLXBackend)
+    back.sample_rate = SR
+    back.native_speed = True
+    back.speed = 1.0
+    back._generate = generate
+    back.play(["one"], cancel)
+    return np.concatenate(out), aborts
+
+
+def loud(text: str):
+    for _ in range(4):
+        yield types.SimpleNamespace(audio=np.full(SR, 0.5, dtype=np.float32), sample_rate=SR)
+
+
+played, _ = play_recording(loud)
+assert abs(played[-1]) < 0.02, f"audio ends at {played[-1]:.2f}, so it clicks"
+assert np.abs(np.diff(played)).max() < 0.02, "the ending must ramp, not step"
+assert len(played) >= 4 * SR, "the ramp must not eat the speech"
+
+cut, aborts = play_recording(loud, stop_after=3)
+assert not aborts, "abort() drops the ramp, so a cancel must drain instead"
+assert abs(cut[-1]) < 0.02, f"a cancelled ending sits at {cut[-1]:.2f}, so it clicks"
+assert np.abs(np.diff(cut)).max() < 0.02, "a cancelled ending must ramp, not step"
+assert len(cut) < 4 * SR, "cancel must still cut the audio short"
+
+print("all click tests passed")

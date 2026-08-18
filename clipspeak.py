@@ -596,6 +596,7 @@ def time_stretch(audio, factor: float, sample_rate: int):
 
 
 MAX_SILENCE = 2.5   # seconds of dead air inside one chunk before we give up on it
+FADE = 0.008        # seconds of ramp-down at the end, so the speaker does not click
 
 
 def token_budget(text: str, headroom: float = 2.5) -> int:
@@ -697,6 +698,8 @@ class MLXBackend(Backend):
 
         def player() -> None:
             stream = None
+            rate = self.sample_rate
+            tail = 0.0            # last sample sent, so the ending can ramp from it
             try:
                 while True:
                     item = audio_q.get()
@@ -706,20 +709,29 @@ class MLXBackend(Backend):
                     if stream is None:
                         stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
                         stream.start()
+                        rate = sr
                     # Write in slices so a cancel lands within ~50ms.
                     step = max(1, sr // 20)
                     for i in range(0, len(arr), step):
                         if cancel.is_set():
                             break
-                        stream.write(arr[i : i + step])
+                        block = arr[i : i + step]
+                        if len(block):
+                            stream.write(block)
+                            tail = float(block[-1])
             except Exception as exc:
                 log.error("playback failed: %s", exc)
             finally:
                 if stream is not None:
                     try:
-                        if cancel.is_set():
-                            stream.abort()
-                        stream.stop()
+                        # Every ending here is a hard cut: cancelled, stalled on
+                        # silence, or out of tokens. Dropping from mid-waveform
+                        # straight to silence is an audible click, so slide the
+                        # last sample down to zero first.
+                        if tail:
+                            stream.write(np.linspace(tail, 0.0, max(1, int(rate * FADE)),
+                                                     dtype=np.float32))
+                        stream.stop()   # drains, unlike abort(), so the ramp is heard
                         stream.close()
                     except Exception:
                         pass
