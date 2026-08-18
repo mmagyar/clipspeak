@@ -72,6 +72,9 @@ def time_stretch(audio, factor: float, sample_rate: int):
 
 MAX_SILENCE = 2.5   # seconds of dead air inside one chunk before we give up on it
 FADE = 0.008        # seconds of ramp-down at the end, so the speaker does not click
+PRE_ROLL = 0.08     # seconds of silence written into a fresh stream: a just-started
+                    # stream renders its first block soft, and that must eat
+                    # silence instead of the first syllable
 
 
 def token_budget(text: str, headroom: float = 2.5) -> int:
@@ -170,9 +173,13 @@ class MLXBackend(Backend):
         import sounddevice as sd
 
         audio_q: queue.Queue = queue.Queue()
+        # Open and prime the stream before synthesis, so the first audio lands
+        # in a warm device instead of racing its startup.
+        stream = sd.OutputStream(samplerate=self.sample_rate, channels=1, dtype="float32")
+        stream.start()
+        stream.write(np.zeros(int(self.sample_rate * PRE_ROLL), dtype=np.float32))
 
         def player() -> None:
-            stream = None
             rate = self.sample_rate
             tail = 0.0            # last sample sent, so the ending can ramp from it
             try:
@@ -181,9 +188,6 @@ class MLXBackend(Backend):
                     if item is None or cancel.is_set():
                         break
                     arr, sr = item
-                    if stream is None:
-                        stream = sd.OutputStream(samplerate=sr, channels=1, dtype="float32")
-                        stream.start()
                     # Write in slices so a cancel lands within ~50ms.
                     step = max(1, sr // 20)
                     for i in range(0, len(arr), step):
@@ -196,19 +200,18 @@ class MLXBackend(Backend):
             except Exception as exc:
                 log.error("playback failed: %s", exc)
             finally:
-                if stream is not None:
-                    try:
-                        # Every ending here is a hard cut: cancelled, stalled on
-                        # silence, or out of tokens. Dropping from mid-waveform
-                        # straight to silence is an audible click, so slide the
-                        # last sample down to zero first.
-                        if tail:
-                            stream.write(np.linspace(tail, 0.0, max(1, int(rate * FADE)),
-                                                     dtype=np.float32))
-                        stream.stop()   # drains, unlike abort(), so the ramp is heard
-                        stream.close()
-                    except Exception:
-                        pass
+                try:
+                    # Every ending here is a hard cut: cancelled, stalled on
+                    # silence, or out of tokens. Dropping from mid-waveform
+                    # straight to silence is an audible click, so slide the
+                    # last sample down to zero first.
+                    if tail:
+                        stream.write(np.linspace(tail, 0.0, max(1, int(rate * FADE)),
+                                                 dtype=np.float32))
+                    stream.stop()   # drains, unlike abort(), so the ramp is heard
+                    stream.close()
+                except Exception:
+                    pass
 
         thread = threading.Thread(target=player, daemon=True)
         thread.start()
