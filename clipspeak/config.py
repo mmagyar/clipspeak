@@ -54,6 +54,11 @@ PRESETS: dict[str, dict] = {
         "kwargs": {"voice": "af_heart", "speed": 1.0, "lang_code": "a"},
         "sample_rate": 24000,
         "native_speed": True,
+        # Kokoro renders a word-initial plosive with a weak burst, which hears
+        # as a clipped first consonant. The prefix moves the content to the
+        # middle of the utterance where it renders properly; the filler's own
+        # audio is cut out again before playback. See FILLER in backends.py.
+        "first_chunk_prefix": "Uh. ",
         "voices": [
             "af_heart", "af_bella", "af_nova", "af_sky", "am_adam", "am_echo",
             "bf_alice", "bf_emma", "bm_daniel", "bm_george",

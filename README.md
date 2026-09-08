@@ -96,6 +96,12 @@ Polling reads `NSPasteboard.changeCount()` and does nothing until that integer m
 - **Download stalls.** Weights land in `~/.cache/huggingface`. Fetch with resume: `hf download mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit`.
 - **"Kokoro requires the optional 'misaki' package".** `pip install "misaki[en]"`. It needs spacy, which has no wheels above Python 3.13. On 3.14, delete `.venv` and let `run.sh` rebuild it with `python3.12`.
 - **Slow to start talking.** Lower `CLIPSPEAK_CHUNK_CHARS`, or use `--preset kokoro`.
+- **First consonant clipped on kokoro.** Kokoro renders a word-initial
+  plosive with a weak burst when the word starts the utterance, which hears
+  as a clipped first consonant. The first chunk is synthesized with `Uh. `
+  prefixed (`FILLER` in `clipspeak/backends.py`), which moves the content to
+  the middle of the utterance where the plosive renders properly, and the
+  filler's own audio is cut out before playback, so nothing extra is heard.
 
 ## Tests
 

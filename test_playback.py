@@ -14,7 +14,7 @@ fake_sd.OutputStream = lambda **kw: types.SimpleNamespace(
 sys.modules["sounddevice"] = fake_sd
 
 from clipspeak import MLXBackend
-from clipspeak.backends import PRE_ROLL
+from clipspeak.backends import PRE_ROLL, LEAD_KEEP
 
 backend = object.__new__(MLXBackend)
 backend.sample_rate = 24000
@@ -189,3 +189,69 @@ assert len(cut) < 4 * SR, "cancel must still cut the audio short"
 assert np.abs(played[: int(SR * PRE_ROLL)]).max() == 0, "the first audio needs silence in front"
 
 print("all click tests passed")
+
+
+# Kokoro renders a word-initial plosive with a weak burst, so the first chunk
+# is prefixed with "Uh. " and the filler's audio cut out again. The content
+# onset is the onset after the longest quiet stretch seen so far.
+from clipspeak.backends import content_onset, FILLER
+
+quiet = lambda sec: np.zeros(int(SR * sec), dtype=np.float32)
+tone = lambda sec, hz: (0.3 * np.sin(2 * np.pi * hz * np.arange(int(SR * sec)) / SR)).astype(np.float32)
+
+prefixed = np.concatenate([quiet(0.2), tone(0.1, 300), quiet(0.1), tone(0.5, 600)])
+cut = content_onset(prefixed, SR)
+assert cut is not None and abs(cut - int(SR * 0.35)) <= 2, \
+    f"content onset should sit at the tone after the pause, got {cut}"
+assert prefixed[cut - int(SR * LEAD_KEEP) : cut].max() == 0, "the cut must keep closure silence"
+assert cut >= int(SR * 0.3), "the filler must be cut off"
+
+long_single = np.concatenate([quiet(0.4), tone(1.2, 600)])
+assert content_onset(long_single, SR) is None, \
+    "no early gap after the first sound: the filler must have merged, so don't cut"
+
+short_single = np.concatenate([quiet(0.2), tone(0.05, 600)])
+assert content_onset(short_single, SR) is None, "a lone early onset must keep buffering"
+
+# A quiet stretch shorter than LEAD_KEEP: keep all of it, never cut into the
+# sound in front of it.
+short_stretch = np.concatenate([quiet(0.2), tone(0.1, 300), quiet(0.04), tone(0.5, 600)])
+cut = content_onset(short_stretch, SR)
+assert cut is not None and abs(cut - int(SR * 0.3)) <= 2, \
+    f"a short closure must be kept whole, cut at {cut/SR:.3f}s"
+assert short_stretch[cut] == 0 and short_stretch[cut - 1] != 0, "the cut must not clip the filler"
+
+# A pause deep inside the content must never read as the boundary.
+deep_pause = np.concatenate([quiet(0.2), tone(0.4, 600), quiet(0.08), tone(0.4, 600)])
+cut = content_onset(deep_pause, SR)
+assert cut is not None and abs(cut - int(SR * 0.63)) <= 2, \
+    f"the first gap after the first sound is the boundary, got {cut/SR:.2f}s"
+
+# End-to-end through _synth_chunk: the prefix reaches the model, the filler
+# audio does not reach the queue.
+back = object.__new__(MLXBackend)
+back.sample_rate = SR
+back.native_speed = True
+back.speed = 1.0
+back.first_chunk_prefix = FILLER
+got_text, out = [], []
+
+def filler_generate(text: str):
+    got_text.append(text)
+    yield types.SimpleNamespace(
+        audio=np.concatenate([quiet(0.2), tone(0.1, 300), quiet(0.1), tone(0.5, 600)]),
+        sample_rate=SR,
+    )
+
+back._generate = filler_generate
+import queue as _q
+q = _q.Queue()
+back._synth_chunk("hello", q, threading.Event(), FILLER)
+assert got_text == [FILLER + "hello"], f"prefix missing from synthesis text: {got_text}"
+arr, sr = q.get_nowait()
+first_loud = int(np.argmax(np.abs(arr) > 0.02))
+assert first_loud < int(SR * 0.2), f"content should start right after LEAD_KEEP, at {first_loud/SR:.2f}s"
+assert abs(arr).max() > 0.2 and np.allclose(np.unique(np.round(np.abs(arr[:first_loud]), 4)), [0.0]), \
+    "the filler audio must be gone"
+
+print("all filler cut tests passed")
